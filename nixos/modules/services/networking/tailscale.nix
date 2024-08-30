@@ -60,6 +60,33 @@ in {
       '';
     };
 
+    authKeyParameters = mkOption {
+      type = types.submodule {
+        options = {
+          ephemeral = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = "Whether to register as an ephemeral node.";
+          };
+          preauthorized = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = "Whether to skip manual device approval.";
+          };
+          baseURL = mkOption {
+            type = types.nullOr types.str;
+            default = null;
+            description = "Base URL for the Tailscale API.";
+          };
+        };
+      };
+      default = { };
+      description = ''
+        Extra parameters to pass after the auth key.
+        See https://tailscale.com/kb/1215/oauth-clients#registering-new-nodes-using-oauth-credentials
+      '';
+    };
+
     extraUpFlags = mkOption {
       description = ''
         Extra flags to pass to {command}`tailscale up`. Only applied if `authKeyFile` is specified.";
@@ -121,12 +148,26 @@ in {
       serviceConfig = {
         Type = "oneshot";
       };
-      script = ''
-        status=$(${config.systemd.package}/bin/systemctl show -P StatusText tailscaled.service)
-        if [[ $status != Connected* ]]; then
-          ${cfg.package}/bin/tailscale up --auth-key 'file:${cfg.authKeyFile}' ${escapeShellArgs cfg.extraUpFlags}
-        fi
-      '';
+      script =
+        let
+          toString = v:
+            if (builtins.isBool v) then (lib.boolToString v)
+            else (toString v);
+          params = lib.pipe cfg.authKeyParameters [
+            (lib.filterAttrs (_: v: v != null))
+            (lib.mapAttrsToList (k: v: "${k}=${toString v}"))
+            (builtins.concatStringsSep "&")
+            (params: if params != "" then "?${params}" else "")
+          ];
+        in
+        ''
+          status=$(${config.systemd.package}/bin/systemctl show -P StatusText tailscaled.service)
+          if [[ $status != Connected* ]]; then
+            ${cfg.package}/bin/tailscale up \
+            --auth-key "$(cat ${cfg.authKeyFile})${params}" \
+            ${escapeShellArgs cfg.extraUpFlags}
+          fi
+        '';
     };
 
     systemd.services.tailscaled-set = mkIf (cfg.extraSetFlags != []) {
